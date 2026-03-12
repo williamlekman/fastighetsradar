@@ -4,27 +4,45 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FastighetsRadar</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: sans-serif; background: #fff; }
-  </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useEffect, useRef, useCallback, useReducer } = React;
+  <div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#9ca3af;">Laddar...</div></div>
 
-    // ── STORAGE SHIM (window.storage API) ──────────────────
-    // Uses localStorage as backend so data persists in the browser
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <script>
+    // Storage shim using localStorage
     window.storage = {
-      get: (key) => Promise.resolve(localStorage.getItem(key) ? { key, value: localStorage.getItem(key) } : null),
-      set: (key, value) => { localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value)); return Promise.resolve({ key, value }); },
-      delete: (key) => { localStorage.removeItem(key); return Promise.resolve({ key, deleted: true }); },
-      list: (prefix) => { const keys = Object.keys(localStorage).filter(k => !prefix || k.startsWith(prefix)); return Promise.resolve({ keys }); }
+      get: function(key) {
+        try {
+          var v = localStorage.getItem(key);
+          return Promise.resolve(v ? { key: key, value: v } : null);
+        } catch(e) { return Promise.resolve(null); }
+      },
+      set: function(key, value) {
+        try {
+          var s = typeof value === "string" ? value : JSON.stringify(value);
+          localStorage.setItem(key, s);
+          return Promise.resolve({ key: key, value: s });
+        } catch(e) { return Promise.resolve(null); }
+      },
+      delete: function(key) {
+        try { localStorage.removeItem(key); } catch(e) {}
+        return Promise.resolve({ key: key, deleted: true });
+      },
+      list: function(prefix) {
+        try {
+          var keys = Object.keys(localStorage).filter(function(k){ return !prefix || k.startsWith(prefix); });
+          return Promise.resolve({ keys: keys });
+        } catch(e) { return Promise.resolve({ keys: [] }); }
+      }
     };
+  </script>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef, useCallback, useReducer } = React;
 
 
 const DEFAULT_TRANSACTIONS = [
@@ -1465,7 +1483,8 @@ export default function FastighetsRadar() {
 }
 
 
-    const root = ReactDOM.createRoot(document.getElementById("root"));
+    const container = document.getElementById("root");
+    const root = ReactDOM.createRoot(container);
     root.render(React.createElement(App));
   </script>
 </body>
