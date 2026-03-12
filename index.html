@@ -705,32 +705,42 @@ function App() {
   useEffect(() => {
     async function load() {
       try {
-        const [tx, inf, note] = await Promise.allSettled([
-          window.storage.get("radar-transactions"),
-          window.storage.get("radar-intel"),
-          window.storage.get("radar-dismissed-note"),
+        const dbFetch = (table) => fetch("/api/db", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "get", table })
+        }).then(r => r.json());
+        const [txData, intelData, pulseData] = await Promise.all([
+          dbFetch("transactions"), dbFetch("intel"), dbFetch("pulse_weeks")
         ]);
-        if (tx.status === "fulfilled" && tx.value) setTransactions(JSON.parse(tx.value.value));
-        if (inf.status === "fulfilled" && inf.value) setIntel(JSON.parse(inf.value.value));
-        if (note.status === "fulfilled" && note.value) setDismissedNote(true);
-        const pw = await window.storage.get("radar-pulse").catch(() => null);
-        if (pw?.value) setPulseWeeks(JSON.parse(pw.value));
-        const lu = await window.storage.get("radar-last-updated").catch(() => null);
-        if (lu?.value) setLastUpdated(new Date(lu.value));
-      } catch {}
+        if (txData?.length) setTransactions(txData.map(t => ({
+          ...t, buyerAdvisor: t.buyer_advisor, sellerAdvisor: t.seller_advisor
+        })));
+        if (intelData?.length) setIntel(intelData);
+        if (pulseData?.length) setPulseWeeks(pulseData);
+      } catch(e) { console.error("DB load error:", e); }
     }
     load();
   }, []);
 
   async function persist(key, value) {
+    const tableMap = { "radar-transactions": "transactions", "radar-intel": "intel", "radar-pulse": "pulse_weeks" };
+    const table = tableMap[key];
+    if (!table) return;
     try {
-      await window.storage.set(key, JSON.stringify(value));
+      await fetch("/api/db", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clear", table }) });
+      if (value?.length > 0) {
+        const rows = value.map(r => table === "transactions"
+          ? { ...r, buyer_advisor: r.buyerAdvisor ?? r.buyer_advisor, seller_advisor: r.sellerAdvisor ?? r.seller_advisor }
+          : r);
+        await fetch("/api/db", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "upsert", table, data: rows }) });
+      }
       const now = new Date();
       setLastUpdated(now);
-      await window.storage.set("radar-last-updated", now.toISOString()).catch(() => {});
       setStorageStatus("Sparat ✓");
       setTimeout(() => setStorageStatus(null), 2000);
-    } catch {}
+    } catch(e) { console.error("DB persist error:", e); }
   }
 
   function formatLastUpdated(date) {
@@ -1057,7 +1067,7 @@ function App() {
         {!dismissedNote && (
           <div style={{ background: "#fffbeb", border: "1.5px solid #fde68a", borderRadius: 10, padding: "10px 18px", fontSize: 13, color: "#92400e", marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>⚠️ All förinstallerad data är exempeldata – inte verkliga transaktioner.</span>
-            <button onClick={() => { setDismissedNote(true); window.storage.set("radar-dismissed-note", "1").catch(() => {}); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#92400e", fontWeight: 700, fontSize: 16, marginLeft: 12 }}>×</button>
+            <button onClick={() => { setDismissedNote(true); null; }} style={{ background: "none", border: "none", cursor: "pointer", color: "#92400e", fontWeight: 700, fontSize: 16, marginLeft: 12 }}>×</button>
           </div>
         )}
 
