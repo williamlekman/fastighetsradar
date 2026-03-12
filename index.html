@@ -106,7 +106,7 @@ const SYSTEM_PROMPT = `Du är analytiker för den svenska fastighetsmarknaden. S
 VIKTIGT: Använd "n.a." (som sträng) för alla fält som inte explicit framgår i texten. yield anges sällan – sätt alltid "n.a." om det inte uttryckligen nämns. buyerAdvisor och sellerAdvisor är rådgivare/mäklare till respektive part om det framgår.`;
 
 async function callClaude(content) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -551,7 +551,7 @@ function MarketPulse({ pulseWeeks, onAddWeek }) {
   async function analyzeForPulse(content) {
     setAnalyzing(true); setError(null);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/claude", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -867,7 +867,7 @@ function App() {
         applyResult(parsed, item.file.name);
         // Also try to extract pulse data from same document
         try {
-          const pulseRes = await fetch("https://api.anthropic.com/v1/messages", {
+          const pulseRes = await fetch("/api/claude", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
