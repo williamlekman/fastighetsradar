@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FastighetsRadar</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #fff; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback, useReducer } = React;
+
+    // ── STORAGE SHIM (window.storage API) ──────────────────
+    // Uses localStorage as backend so data persists in the browser
+    window.storage = {
+      get: (key) => Promise.resolve(localStorage.getItem(key) ? { key, value: localStorage.getItem(key) } : null),
+      set: (key, value) => { localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value)); return Promise.resolve({ key, value }); },
+      delete: (key) => { localStorage.removeItem(key); return Promise.resolve({ key, deleted: true }); },
+      list: (prefix) => { const keys = Object.keys(localStorage).filter(k => !prefix || k.startsWith(prefix)); return Promise.resolve({ keys }); }
+    };
+
+
+const DEFAULT_TRANSACTIONS = [
+  { id: 1, buyer: "Castellum", seller: "Vasakronan", location: "Stockholm", type: "Kontor", sqm: 12400, price: 485, yield: "n.a.", date: "2025-03-04", buyerAdvisor: "CBRE", sellerAdvisor: "JLL" },
+  { id: 2, buyer: "Niam", seller: "AMF Fastigheter", location: "Göteborg", type: "Logistik", sqm: 34000, price: 290, yield: "n.a.", date: "2025-03-01", buyerAdvisor: "n.a.", sellerAdvisor: "Cushman & Wakefield" },
+  { id: 3, buyer: "Blackstone", seller: "Corem", location: "Malmö", type: "Handel", sqm: 8200, price: 175, yield: "n.a.", date: "2025-02-26", buyerAdvisor: "Savills", sellerAdvisor: "n.a." },
+  { id: 4, buyer: "Klövern", seller: "Privat", location: "Uppsala", type: "Bostäder", sqm: "n.a.", price: 142, yield: "n.a.", date: "2025-02-21", buyerAdvisor: "n.a.", sellerAdvisor: "n.a." },
+  { id: 5, buyer: "Sagax", seller: "Hemfosa", location: "Stockholm", type: "Lager/industri", sqm: 21000, price: 380, yield: "n.a.", date: "2025-02-18", buyerAdvisor: "Colliers", sellerAdvisor: "Newsec" },
+];
+const DEFAULT_COMPANIES = [
+  { name: "Castellum", status: "KÖPARE", activity: 85, reason: "Aktivt förvärvsläge – söker kontor och logistik i storstäder.", sectors: ["Kontor", "Logistik"] },
+  { name: "Corem", status: "SÄLJARE", activity: 30, reason: "Avyttrar icke-kärnbestånd för att minska belåningsgrad.", sectors: ["Handel", "Kontor"] },
+  { name: "Niam", status: "KÖPARE", activity: 78, reason: "Ny fond stängd. Kapital att placera med fokus på opportunistiska förvärv.", sectors: ["Logistik", "Bostäder"] },
+  { name: "Vasakronan", status: "AVVAKTAR", activity: 55, reason: "Säljer selektivt men inga större förvärv.", sectors: ["Kontor"] },
+  { name: "Blackstone", status: "KÖPARE", activity: 70, reason: "Söker distressed assets och värdetillväxtlägen i Norden.", sectors: ["Handel", "Logistik"] },
+  { name: "AMF Fastigheter", status: "SÄLJARE", activity: 25, reason: "Portföljrensning pågår. Koncentrerar till Stockholm.", sectors: ["Kontor", "Handel"] },
+  { name: "Sagax", status: "KÖPARE", activity: 90, reason: "Extremt aktiv – förvärvar lager och lätt industri konsekvent.", sectors: ["Lager", "Industri"] },
+  { name: "Hemfosa", status: "AVVAKTAR", activity: 50, reason: "Refinansiering pågår. Begränsat transaktionsutrymme under H1.", sectors: ["Samhällsfastigheter"] },
+];
+const DEFAULT_INTEL = [
+  { id: 1, date: "2025-03-05", source: "Fastighetsvärlden", category: "TRANSAKTION", bullets: ["Castellum förvärvar kontorsportfölj i Solna för 485 MSEK", "Säljare är Vasakronan som rensar icke-kärntillgångar", "Direktavkastning ca 4,2% – under snittpriset för segmentet"] },
+  { id: 2, date: "2025-03-04", source: "Nyhetsbrev", category: "FINANSIERING", bullets: ["Niam stänger Niam Nordic Real Estate Fund VIII med 1,8 mdr EUR", "Fokus på opportunistiska och value-add affärer i Norden", "Tydlig signal om ökat transaktionsutrymme under 2025"] },
+  { id: 3, date: "2025-03-03", source: "DI", category: "MARKNAD", bullets: ["Transaktionsvolymen Q1 2025 upp 34% jämfört med Q1 2024", "Logistik och bostäder dominerar – kontorsmarknaden fortfarande trög", "Utländska aktörer driver stor del av volymen"] },
+  { id: 4, date: "2025-02-27", source: "Fastighetsvärlden", category: "FINANSIERING", bullets: ["Swedbank lättar LTV-krav för prime-objekt till max 60%", "Ränteläget skapar köpmöjligheter för egetkapitalstarka aktörer"] },
+  { id: 5, date: "2025-02-20", source: "DI", category: "TRANSAKTION", bullets: ["Sagax förvärvar logistikportfölj av Hemfosa – 380 MSEK", "Affären stärker Sagax position som störst inom lätt industri i Norden"] },
+];
+
+const STATUS_CONFIG = {
+  KÖPARE: { color: "#16a34a", bg: "#f0fdf4", label: "Köpare" },
+  SÄLJARE: { color: "#dc2626", bg: "#fef2f2", label: "Säljare" },
+  AVVAKTAR: { color: "#6b7280", bg: "#f9fafb", label: "Avvaktar" },
+};
+const CAT_CONFIG = {
+  TRANSAKTION: { color: "#16a34a", bg: "#f0fdf4" },
+  FINANSIERING: { color: "#2563eb", bg: "#eff6ff" },
+  MARKNAD: { color: "#d97706", bg: "#fffbeb" },
+};
+
+
+const DEFAULT_PULSE_WEEKS = [
+  {
+    id: 1, week: "V6 2026", date: "2026-02-02",
+    stocks: [
+      { name: "Castellum",   ticker: "CAST",  price: 154.3, chg: 1.0  },
+      { name: "Sagax",       ticker: "SAGA",  price: 266.0, chg: 0.6  },
+      { name: "Corem",       ticker: "CORE",  price: 15.2,  chg: -0.3 },
+      { name: "Catena",      ticker: "CATE",  price: 462.4, chg: -0.2 },
+      { name: "Atrium Ljungberg", ticker: "ATRL", price: 33.8, chg: 1.7 },
+      { name: "Platzer",     ticker: "PLAZ",  price: 74.4,  chg: 3.6  },
+      { name: "Nyfosa",      ticker: "NYFOS", price: 93.6,  chg: 1.0  },
+      { name: "Fabege",      ticker: "FABE",  price: 82.5,  chg: -4.5 },
+    ],
+    rates: { swap5y: 2.48, govBond10y: 2.31, spread: 0.17 },
+    summary: "Vecka 6 präglades av stigande aktier för de flesta nordiska fastighetsbolag. Platzer stod ut med +3,6%. Swapräntan 5Y håller sig stabilt under 2,5% vilket ger visst stöd för transaktionsmarknaden. Spread mot statsobligation är fortsatt smal på 17 punkter.",
+  },
+];
+
+const PULSE_SYSTEM_PROMPT = `Du är analytiker för nordisk fastighets- och kapitalmarknad. Analysera dokumentet och extrahera marknadsdata. Svara ENBART med JSON, inga backticks:
+{
+  "week": "V## YYYY",
+  "date": "YYYY-MM-DD",
+  "stocks": [{"name":"","ticker":"","price":0,"chg":0}],
+  "rates": {"swap5y":0,"govBond10y":0,"spread":0},
+  "summary": "2-3 meningar om veckans marknadsutveckling på svenska"
+}
+Inkludera bara noterade nordiska fastighetsbolag. chg är procentuell veckoförändring. Om räntedata saknas, sätt 0.`;
+const SYSTEM_PROMPT = `Du är analytiker för den svenska fastighetsmarknaden. Svara ENBART med JSON, inga backticks:
+{"bullets":["..."],"category":"TRANSAKTION|FINANSIERING|MARKNAD","transactions":[{"buyer":"","seller":"","location":"","type":"","sqm":"n.a.","price":"n.a.","yield":"n.a.","buyerAdvisor":"n.a.","sellerAdvisor":"n.a."}],"companies":[{"name":"","status":"KÖPARE|SÄLJARE|AVVAKTAR","reason":""}]}
+VIKTIGT: Använd "n.a." (som sträng) för alla fält som inte explicit framgår i texten. yield anges sällan – sätt alltid "n.a." om det inte uttryckligen nämns. buyerAdvisor och sellerAdvisor är rådgivare/mäklare till respektive part om det framgår.`;
+
+async function callClaude(content) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content }],
+    }),
+  });
+  const data = await res.json();
+  const raw = data.content?.map(i => i.text || "").join("") || "{}";
+  return JSON.parse(raw.replace(/```json|```/g, "").trim());
+}
+
+// ── DEDUP HELPERS ──────────────────────────────────────────
+function similarity(a, b) {
+  if (!a || !b) return 0;
+  const wa = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  const wb = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  let overlap = 0;
+  wa.forEach(w => { if (wb.has(w)) overlap++; });
+  return overlap / Math.max(wa.size, wb.size, 1);
+}
+
+function findTxDuplicate(newTx, existing) {
+  return existing.find(t => {
+    const sameBuyer    = t.buyer?.toLowerCase() === newTx.buyer?.toLowerCase();
+    const sameSeller   = t.seller?.toLowerCase() === newTx.seller?.toLowerCase();
+    const sameLocation = t.location?.toLowerCase() === newTx.location?.toLowerCase();
+    const sameType     = t.type?.toLowerCase() === newTx.type?.toLowerCase();
+    return sameBuyer && sameSeller && sameLocation && sameType;
+  });
+}
+
+function findIntelDuplicate(newItem, existing) {
+  const newText = newItem.bullets?.join(" ") || "";
+  return existing.find(e => {
+    if (Math.abs(new Date(e.date) - new Date(newItem.date)) > 7 * 86400000) return false;
+    const eText = e.bullets?.join(" ") || "";
+    return similarity(newText, eText) > 0.65;
+  });
+}
+
+// ── COMPANY PAGE ───────────────────────────────────────────
+function CompanyPage({ name, companies, transactions, intel, onClose }) {
+  const profile = companies.find(c => c.name === name);
+  const cfg = STATUS_CONFIG[profile?.status] || STATUS_CONFIG.AVVAKTAR;
+  const ac = (profile?.activity || 0) >= 70 ? "#16a34a" : (profile?.activity || 0) >= 45 ? "#d97706" : "#dc2626";
+
+  const txAsBuyer  = transactions.filter(t => t.buyer?.toLowerCase() === name.toLowerCase());
+  const txAsSeller = transactions.filter(t => t.seller?.toLowerCase() === name.toLowerCase());
+  const allTx      = [...txAsBuyer, ...txAsSeller].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const mentions = intel.filter(i =>
+    i.bullets?.some(b => b.toLowerCase().includes(name.toLowerCase())) ||
+    i.source?.toLowerCase().includes(name.toLowerCase())
+  ).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const totalBought = txAsBuyer.reduce((s, t) => s + (t.price || 0), 0);
+  const totalSold   = txAsSeller.reduce((s, t) => s + (t.price || 0), 0);
+  const avgYield    = allTx.length ? (allTx.reduce((s, t) => s + (t.yield || 0), 0) / allTx.length).toFixed(2) : null;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex" }}>
+      {/* Backdrop */}
+      <div onClick={onClose} style={{ flex: 1, background: "rgba(0,0,0,0.18)", cursor: "pointer" }} />
+      {/* Panel */}
+      <div style={{ width: 560, background: "#fff", height: "100vh", overflowY: "auto", boxShadow: "-8px 0 40px rgba(0,0,0,0.1)", display: "flex", flexDirection: "column" }}>
+        {/* Header */}
+        <div style={{ padding: "28px 32px 24px", borderBottom: "1.5px solid #f0f0f0", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontFamily: "Instrument Serif, serif", fontSize: 26, fontWeight: 400, marginBottom: 8 }}>{name}</div>
+              {profile && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 12px", borderRadius: 100, background: cfg.bg, color: cfg.color, fontSize: 12, fontWeight: 600 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: cfg.color, display: "inline-block" }} />{cfg.label}
+                </span>
+              )}
+            </div>
+            <button onClick={onClose} style={{ background: "#f3f4f6", border: "none", cursor: "pointer", width: 32, height: 32, borderRadius: "50%", fontSize: 16, color: "#6b7280", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+          </div>
+          {profile?.reason && <p style={{ fontSize: 13, color: "#6b7280", lineHeight: 1.6, marginTop: 12 }}>{profile.reason}</p>}
+        </div>
+
+        <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 28 }}>
+
+          {/* KPI strip */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+            {[
+              { label: "Köpt totalt", value: totalBought ? `${totalBought} MSEK` : "–", color: "#16a34a" },
+              { label: "Sålt totalt",  value: totalSold  ? `${totalSold} MSEK`  : "–", color: "#dc2626" },
+              { label: "Snitt yield",  value: avgYield   ? `${avgYield}%`        : "–", color: "#111" },
+            ].map(k => (
+              <div key={k.label} style={{ background: "#fafafa", borderRadius: 12, padding: "14px 16px", border: "1.5px solid #f0f0f0" }}>
+                <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>{k.label}</div>
+                <div style={{ fontSize: 18, fontFamily: "Instrument Serif, serif", color: k.color }}>{k.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Activity bar */}
+          {profile && (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Aktivitetsnivå</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: ac }}>{profile.activity}%</span>
+              </div>
+              <div style={{ height: 5, background: "#f3f4f6", borderRadius: 10 }}>
+                <div style={{ height: 5, width: `${profile.activity}%`, background: ac, borderRadius: 10 }} />
+              </div>
+              {profile.sectors?.length > 0 && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                  {profile.sectors.map(s => <span key={s} style={{ display: "inline-block", padding: "2px 10px", borderRadius: 100, fontSize: 11, fontWeight: 500, background: "#f3f4f6", color: "#6b7280" }}>{s}</span>)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Transactions */}
+          {allTx.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#111", marginBottom: 12 }}>Transaktioner ({allTx.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {allTx.map(tx => {
+                  const isBuyer = tx.buyer?.toLowerCase() === name.toLowerCase();
+                  return (
+                    <div key={tx.id} style={{ padding: "12px 16px", background: "#fafafa", borderRadius: 10, border: "1.5px solid #f0f0f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 4 }}>{tx.date} · {tx.location}</div>
+                        <div style={{ fontSize: 13, color: "#374151" }}>
+                          <span style={{ color: isBuyer ? "#16a34a" : "#dc2626", fontWeight: 600 }}>{isBuyer ? "Köpte" : "Sålde"}</span>
+                          {" "}{tx.type}{tx.sqm ? ` · ${tx.sqm.toLocaleString("sv-SE")} kvm` : ""}
+                          {isBuyer ? ` av ${tx.seller}` : ` till ${tx.buyer}`}
+                          {isBuyer && tx.buyerAdvisor && tx.buyerAdvisor !== "n.a." && <span style={{ color: "#9ca3af" }}> · Rådg: {tx.buyerAdvisor}</span>}
+                          {!isBuyer && tx.sellerAdvisor && tx.sellerAdvisor !== "n.a." && <span style={{ color: "#9ca3af" }}> · Rådg: {tx.sellerAdvisor}</span>}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 12 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{tx.price} MSEK</div>
+                        {tx.yield && <div style={{ fontSize: 11, color: tx.yield > 5.5 ? "#16a34a" : tx.yield > 4.5 ? "#d97706" : "#dc2626", fontWeight: 600 }}>{tx.yield}%</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* News mentions */}
+          {mentions.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#111", marginBottom: 12 }}>Omnämnd i nyheter ({mentions.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {mentions.map(item => {
+                  const catCfg = CAT_CONFIG[item.category] || CAT_CONFIG.MARKNAD;
+                  return (
+                    <div key={item.id} style={{ padding: "12px 16px", background: "#fafafa", borderRadius: 10, border: "1.5px solid #f0f0f0" }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ fontSize: 11, color: "#9ca3af" }}>{item.date}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 100, background: catCfg.bg, color: catCfg.color, fontSize: 10, fontWeight: 600 }}>
+                          <span style={{ width: 5, height: 5, borderRadius: "50%", background: catCfg.color, display: "inline-block" }} />{item.category}
+                        </span>
+                        <span style={{ fontSize: 11, color: "#d1d5db" }}>{item.source}</span>
+                      </div>
+                      {item.bullets?.filter(b => b.toLowerCase().includes(name.toLowerCase())).map((b, i) => (
+                        <div key={i} style={{ display: "flex", gap: 8, fontSize: 13, color: "#374151", lineHeight: 1.5 }}>
+                          <span style={{ color: catCfg.color, fontWeight: 700, flexShrink: 0 }}>—</span>{b}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {allTx.length === 0 && mentions.length === 0 && (
+            <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", fontSize: 14 }}>Inga transaktioner eller nyheter registrerade för {name} ännu.</div>
+          )}
+        </div>
+      </div>
+
+      {/* Duplicate warnings */}
+      {dupWarnings.filter(w => !dismissedDups.has(w.id)).length > 0 && (
+        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 900, display: "flex", flexDirection: "column", gap: 8, maxWidth: 420 }}>
+          {dupWarnings.filter(w => !dismissedDups.has(w.id)).map(w => (
+            <div key={w.id} style={{ background: "#fff", border: "1.5px solid #fde68a", borderRadius: 14, padding: "14px 18px", boxShadow: "0 8px 32px rgba(0,0,0,0.1)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e" }}>⚠️ Möjlig dubblett</div>
+                <button onClick={() => setDismissedDups(prev => new Set([...prev, w.id]))} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 16, lineHeight: 1 }}>×</button>
+              </div>
+              <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.6, marginBottom: 10 }}>
+                {w.type === "tx"
+                  ? <span>Transaktion <strong>{w.newItem.buyer} ← {w.newItem.seller}</strong> ({w.newItem.price} MSEK) verkar redan finnas registrerad.</span>
+                  : <span>Nyhet från <strong>{w.newItem.source}</strong> liknar en befintlig nyhet från {w.existing.date}.</span>
+                }
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => {
+                  if (w.type === "tx") setTransactions(prev => { const u = [{ ...w.newItem }, ...prev]; persist("radar-transactions", u); return u; });
+                  if (w.type === "intel") setIntel(prev => { const u = [w.newItem, ...prev]; persist("radar-intel", u); return u; });
+                  setDismissedDups(prev => new Set([...prev, w.id]));
+                }} style={{ background: "#111", color: "#fff", border: "none", cursor: "pointer", padding: "5px 14px", borderRadius: 100, fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
+                  Lägg till ändå
+                </button>
+                <button onClick={() => setDismissedDups(prev => new Set([...prev, w.id]))} style={{ background: "none", border: "1.5px solid #e5e7eb", cursor: "pointer", padding: "5px 14px", borderRadius: 100, fontSize: 12, fontWeight: 500, color: "#6b7280", fontFamily: "inherit" }}>
+                  Skippa
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Company page slide-in */}
+      {selectedCompany && (
+        <CompanyPage
+          name={selectedCompany}
+          companies={companies}
+          transactions={transactions}
+          intel={intel}
+          onClose={() => setSelectedCompany(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+
+
+// SVG Icons
+const UploadIcon = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+    <polyline points="17 8 12 3 7 8"/>
+    <line x1="12" y1="3" x2="12" y2="15"/>
+  </svg>
+);
+const FileIcon = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+    <polyline points="14 2 14 8 20 8"/>
+    <line x1="9" y1="13" x2="15" y2="13"/>
+    <line x1="9" y1="17" x2="13" y2="17"/>
+  </svg>
+);
+const SpinIcon = () => (
+  <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+  </svg>
+);
+
+function ResultCard({ result }) {
+  if (!result) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 18 }}>
+      {result.bullets?.length > 0 && (
+        <div style={{ background: "#fafafa", border: "1.5px solid #f0f0f0", borderRadius: 12, padding: "14px 18px" }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Extraherade insikter</div>
+          {result.bullets.map((b, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, fontSize: 13, color: "#374151", marginBottom: 6, lineHeight: 1.6 }}>
+              <span style={{ color: "#16a34a", fontWeight: 700, flexShrink: 0 }}>—</span>{b}
+            </div>
+          ))}
+        </div>
+      )}
+      {result.transactions?.length > 0 && (
+        <div style={{ background: "#fafafa", border: "1.5px solid #f0f0f0", borderRadius: 12, padding: "14px 18px" }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Tillagda transaktioner</div>
+          {result.transactions.map((t, i) => (
+            <div key={i} style={{ fontSize: 13, color: "#6b7280", marginBottom: 5, lineHeight: 1.6 }}>
+              <span style={{ color: "#16a34a", fontWeight: 600 }}>{t.buyer || "?"}</span>
+              <span style={{ color: "#9ca3af", margin: "0 6px" }}>←</span>
+              <span style={{ color: "#dc2626", fontWeight: 600 }}>{t.seller || "?"}</span>
+              {t.location ? ` · ${t.location}` : ""}{t.type ? ` · ${t.type}` : ""}{t.price ? ` · ${t.price} MSEK` : ""}{t.yield ? ` · ${t.yield}%` : ""}
+            </div>
+          ))}
+        </div>
+      )}
+      {result.companies?.length > 0 && (
+        <div style={{ background: "#fafafa", border: "1.5px solid #f0f0f0", borderRadius: 12, padding: "14px 18px" }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Identifierade aktörer</div>
+          {result.companies.map((c, i) => {
+            const cfg = STATUS_CONFIG[c.status] || STATUS_CONFIG.AVVAKTAR;
+            return (
+              <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "center" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 10px", borderRadius: 100, background: cfg.bg, color: cfg.color, fontSize: 11, fontWeight: 600, flexShrink: 0 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: cfg.color, display: "inline-block" }} />{cfg.label}
+                </span>
+                <span style={{ fontSize: 13, color: "#111", fontWeight: 600 }}>{c.name}</span>
+                {c.reason && <span style={{ fontSize: 13, color: "#6b7280" }}>{c.reason}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── DASHBOARD ──────────────────────────────────────────────
+function Dashboard({ transactions, companies, intel, onNavigate }) {
+  const buyers = companies.filter(c => c.status === "KÖPARE");
+  const sellers = companies.filter(c => c.status === "SÄLJARE");
+  const totalVol = transactions.reduce((s, t) => s + (t.price || 0), 0);
+  const avgYield = transactions.length ? (transactions.reduce((s, t) => s + (t.yield || 0), 0) / transactions.length).toFixed(2) : "–";
+  const sentimentScore = Math.round((buyers.length / (buyers.length + sellers.length)) * 100);
+  const sentimentLabel = sentimentScore >= 65 ? "Köpmarknad" : sentimentScore >= 45 ? "Balanserad" : "Säljmarknad";
+  const sentimentColor = sentimentScore >= 65 ? "#16a34a" : sentimentScore >= 45 ? "#d97706" : "#dc2626";
+
+  // Last 7 days intel
+  const cutoff7 = new Date(); cutoff7.setDate(cutoff7.getDate() - 7);
+  const recentIntel = intel.filter(i => new Date(i.date) >= cutoff7);
+
+  // Top active buyers
+  const topBuyers = [...buyers].sort((a, b) => b.activity - a.activity).slice(0, 3);
+
+  // Type breakdown
+  const typeMap = {};
+  transactions.forEach(t => { typeMap[t.type] = (typeMap[t.type] || 0) + t.price; });
+  const typeBreakdown = Object.entries(typeMap).sort((a, b) => b[1] - a[1]);
+  const maxType = typeBreakdown[0]?.[1] || 1;
+
+  return (
+    <div className="fade">
+      {/* Top KPI strip */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 28 }}>
+        {[
+          { label: "Total volym", value: `${totalVol.toLocaleString("sv-SE")} MSEK`, sub: `${transactions.length} transaktioner`, color: "#111" },
+          { label: "Snitt-yield", value: `${avgYield}%`, sub: "Alla fastighetstyper", color: avgYield > 5 ? "#16a34a" : avgYield > 4 ? "#d97706" : "#dc2626" },
+          { label: "Aktiva köpare", value: buyers.length, sub: `${sellers.length} aktiva säljare`, color: "#16a34a" },
+          { label: "Marknadssentiment", value: sentimentLabel, sub: `${sentimentScore}% köparövervikt`, color: sentimentColor },
+        ].map((k, i) => (
+          <div key={i} className="card" style={{ padding: "20px 22px" }}>
+            <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>{k.label}</div>
+            <div style={{ fontSize: 22, fontFamily: "Instrument Serif, serif", fontWeight: 400, color: k.color, marginBottom: 4 }}>{k.value}</div>
+            <div style={{ fontSize: 12, color: "#9ca3af" }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 20, marginBottom: 20 }}>
+        {/* Sentiment bar */}
+        <div className="card" style={{ padding: "22px 24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>Marknadssentiment</div>
+            <span style={{ fontSize: 12, color: sentimentColor, fontWeight: 600, background: sentimentScore >= 65 ? "#f0fdf4" : sentimentScore >= 45 ? "#fffbeb" : "#fef2f2", padding: "3px 10px", borderRadius: 100 }}>{sentimentLabel}</span>
+          </div>
+          {/* Buyer/seller spectrum */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ height: 10, background: "#f3f4f6", borderRadius: 10, overflow: "hidden", position: "relative" }}>
+              <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${sentimentScore}%`, background: "linear-gradient(90deg, #16a34a, #86efac)", borderRadius: 10, transition: "width 1s ease" }} />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
+              <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 600 }}>Köpare {buyers.length}</span>
+              <span style={{ fontSize: 11, color: "#dc2626", fontWeight: 600 }}>Säljare {sellers.length}</span>
+            </div>
+          </div>
+          {/* Type volume bars */}
+          <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Volym per fastighetstyp (MSEK)</div>
+          {typeBreakdown.map(([type, vol]) => (
+            <div key={type} style={{ marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 12, color: "#374151" }}>{type}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#111" }}>{vol}</span>
+              </div>
+              <div style={{ height: 4, background: "#f3f4f6", borderRadius: 10 }}>
+                <div style={{ height: 4, width: `${(vol / maxType) * 100}%`, background: "#111", borderRadius: 10, transition: "width 0.8s" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Most active buyers */}
+        <div className="card" style={{ padding: "22px 24px" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#111", marginBottom: 18 }}>Mest aktiva köpare</div>
+          {topBuyers.map((c, i) => (
+            <div key={c.name} style={{ marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 20, height: 20, borderRadius: "50%", background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#6b7280" }}>{i + 1}</span>
+                  <span style={{ fontSize: 14, fontWeight: 600, fontFamily: "Instrument Serif, serif" }}>{c.name}</span>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#16a34a" }}>{c.activity}%</span>
+              </div>
+              <div style={{ height: 4, background: "#f3f4f6", borderRadius: 10 }}>
+                <div style={{ height: 4, width: `${c.activity}%`, background: "#16a34a", borderRadius: 10, transition: "width 0.8s" }} />
+              </div>
+              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 5, lineHeight: 1.4 }}>{c.reason}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Recent intel – last 7 days */}
+      <div className="card" style={{ padding: "22px 24px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>Senaste 7 dagarna</div>
+          <button onClick={() => onNavigate("intel")} style={{ background: "none", border: "1.5px solid #e5e7eb", borderRadius: 100, padding: "4px 14px", fontSize: 12, fontWeight: 500, color: "#6b7280", cursor: "pointer", fontFamily: "inherit" }}>
+            Visa allt →
+          </button>
+        </div>
+        {recentIntel.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#9ca3af", textAlign: "center", padding: "20px 0" }}>Inga nyheter de senaste 7 dagarna. Lägg till underlag via fliken "Lägg till".</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {recentIntel.map(item => {
+              const cfg = CAT_CONFIG[item.category] || CAT_CONFIG.MARKNAD;
+              return (
+                <div key={item.id} style={{ display: "flex", gap: 20, paddingBottom: 14, borderBottom: "1px solid #f9fafb" }}>
+                  <div style={{ minWidth: 80 }}>
+                    <div style={{ fontSize: 11, color: "#9ca3af" }}>{item.date}</div>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 100, background: cfg.bg, color: cfg.color, fontSize: 10, fontWeight: 600, marginTop: 5 }}>
+                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: cfg.color, display: "inline-block" }} />{item.category}
+                    </span>
+                  </div>
+                  <div>
+                    {item.bullets.map((b, i) => (
+                      <div key={i} style={{ display: "flex", gap: 8, fontSize: 13, color: "#374151", marginBottom: 4, lineHeight: 1.5 }}>
+                        <span style={{ color: cfg.color, fontWeight: 700, flexShrink: 0 }}>—</span>{b}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ── MARKET PULSE TAB ───────────────────────────────────────
+function MarketPulse({ pulseWeeks, onAddWeek }) {
+  const [analyzing, setAnalyzing] = useState(false);
+  const [error, setError] = useState(null);
+  const latest = pulseWeeks[0] || null;
+  const prev   = pulseWeeks[1] || null;
+
+  async function analyzeForPulse(content) {
+    setAnalyzing(true); setError(null);
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1500,
+          system: PULSE_SYSTEM_PROMPT,
+          messages: [{ role: "user", content }],
+        }),
+      });
+      const data = await res.json();
+      const raw = data.content?.map(i => i.text || "").join("") || "{}";
+      const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+      if (parsed.week) {
+        onAddWeek({ ...parsed, id: Date.now() });
+      } else {
+        setError("Kunde inte extrahera marknadsdata – kontrollera att dokumentet innehåller aktiekurser.");
+      }
+    } catch { setError("Analysen misslyckades."); }
+    setAnalyzing(false);
+  }
+
+  return (
+    <div className="fade">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
+        <div>
+          <h2 style={{ fontFamily: "Instrument Serif, serif", fontSize: 28, fontWeight: 400 }}>Marknadspuls</h2>
+          {latest && <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>Senaste data: {latest.week} · {latest.date}</div>}
+        </div>
+        <div style={{ fontSize: 12, color: "#9ca3af", textAlign: "right" }}>
+          Analyseras automatiskt när du laddar upp<br />ett nyhetsbrev via "Lägg till"
+        </div>
+      </div>
+
+      {!latest && (
+        <div style={{ textAlign: "center", padding: "60px 0", color: "#9ca3af", fontSize: 14, border: "2px dashed #f0f0f0", borderRadius: 16 }}>
+          Ingen marknadsdata ännu. Ladda upp ett Colliers Weekly eller liknande nyhetsbrev via "Lägg till".
+        </div>
+      )}
+
+      {latest && (
+        <>
+          {/* Rate strip */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 20 }}>
+            {[
+              { label: "Swapränta 5Y", value: latest.rates?.swap5y ? `${latest.rates.swap5y}%` : "–", prev: prev?.rates?.swap5y, up: latest.rates?.swap5y > (prev?.rates?.swap5y || 0) },
+              { label: "Statsobligation 10Y", value: latest.rates?.govBond10y ? `${latest.rates.govBond10y}%` : "–", prev: prev?.rates?.govBond10y, up: latest.rates?.govBond10y > (prev?.rates?.govBond10y || 0) },
+              { label: "Spread (swap-stats)", value: latest.rates?.spread ? `${latest.rates.spread.toFixed(2)}%` : "–", prev: prev?.rates?.spread, neutral: true },
+            ].map(k => {
+              const hasChange = k.prev != null && k.prev !== 0;
+              const diff = hasChange ? (parseFloat(latest.rates?.[k.label === "Swapränta 5Y" ? "swap5y" : k.label === "Statsobligation 10Y" ? "govBond10y" : "spread"]) - k.prev).toFixed(2) : null;
+              return (
+                <div key={k.label} className="card" style={{ padding: "20px 22px" }}>
+                  <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>{k.label}</div>
+                  <div style={{ fontSize: 24, fontFamily: "Instrument Serif, serif", color: "#111", marginBottom: 6 }}>{k.value}</div>
+                  {diff != null && (
+                    <div style={{ fontSize: 11, fontWeight: 600, color: k.neutral ? "#6b7280" : k.up ? "#dc2626" : "#16a34a" }}>
+                      {k.up ? "▲" : "▼"} {Math.abs(diff)}% vs förra veckan
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Stock strip */}
+          <div className="card" style={{ padding: "20px 24px", marginBottom: 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#111", marginBottom: 16 }}>
+              Nordiska fastighetsaktier — {latest.week}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
+              {(latest.stocks || []).map(s => {
+                const isPos = s.chg >= 0;
+                const color = isPos ? "#16a34a" : "#dc2626";
+                const bg    = isPos ? "#f0fdf4" : "#fef2f2";
+                // Compare with prev week
+                const prevStock = prev?.stocks?.find(ps => ps.ticker === s.ticker);
+                return (
+                  <div key={s.ticker} style={{ background: "#fafafa", borderRadius: 12, padding: "12px 14px", border: "1.5px solid #f0f0f0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", letterSpacing: "0.04em" }}>{s.ticker}</div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "#111", marginTop: 2 }}>{s.name.length > 14 ? s.name.slice(0,13)+"…" : s.name}</div>
+                      </div>
+                      <span style={{ background: bg, color, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 100 }}>
+                        {isPos ? "+" : ""}{s.chg}%
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 16, fontFamily: "Instrument Serif, serif", color: "#111" }}>
+                      {s.price?.toLocaleString("sv-SE")}
+                    </div>
+                    {prevStock && (
+                      <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 4 }}>
+                        Förra: {prevStock.price?.toLocaleString("sv-SE")}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Weekly summary */}
+          {latest.summary && (
+            <div className="card" style={{ padding: "20px 24px", marginBottom: 20 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Veckans marknadssummering</div>
+              <p style={{ fontSize: 14, color: "#374151", lineHeight: 1.7 }}>{latest.summary}</p>
+            </div>
+          )}
+
+          {/* Historical weeks */}
+          {pulseWeeks.length > 1 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#111", marginBottom: 12 }}>Historik</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {pulseWeeks.slice(1).map(w => (
+                  <div key={w.id} className="card" style={{ padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{w.week}</span>
+                      <span style={{ fontSize: 12, color: "#9ca3af", marginLeft: 10 }}>{w.date}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 20, fontSize: 12, color: "#6b7280" }}>
+                      {w.rates?.swap5y > 0 && <span>Swap 5Y: <strong style={{ color: "#111" }}>{w.rates.swap5y}%</strong></span>}
+                      <span>{(w.stocks || []).filter(s => s.chg >= 0).length}/{(w.stocks || []).length} aktier upp</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {error && <div style={{ marginTop: 14, padding: "11px 16px", background: "#fef2f2", border: "1.5px solid #fecaca", borderRadius: 10, fontSize: 13, color: "#dc2626" }}>{error}</div>}
+    </div>
+  );
+}
+
+// ── MAIN ───────────────────────────────────────────────────
+export default function FastighetsRadar() {
+  const [tab, setTab] = useState("dashboard");
+  const [transactions, setTransactions] = useState(DEFAULT_TRANSACTIONS);
+  const [companies] = useState(DEFAULT_COMPANIES);
+  const [intel, setIntel] = useState(DEFAULT_INTEL);
+  const [filterStatus, setFilterStatus] = useState("ALLA");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [sortCol, setSortCol] = useState("date");
+  const [timeFilter, setTimeFilter] = useState("ALL");
+  const [storageStatus, setStorageStatus] = useState(null);
+  const [dismissedNote, setDismissedNote] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [pulseWeeks, setPulseWeeks] = useState(DEFAULT_PULSE_WEEKS);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState(null);
+  const [dupWarnings, setDupWarnings] = useState([]); // [{type:'tx'|'intel', newItem, existing}]
+  const [editingTx, setEditingTx] = useState(null); // tx id being edited
+  const [editDraft, setEditDraft] = useState({});   // current edits
+  const [advSearch, setAdvSearch] = useState({ type: "", location: "", dateFrom2: "", dateTo2: "" });
+  const [advOpen, setAdvOpen] = useState(false);
+  const [dismissedDups, setDismissedDups] = useState(new Set());
+
+  // Batch PDF queue: each item = { id, file, status: 'waiting'|'analyzing'|'done'|'error', result, error }
+  const [queue, setQueue] = useState([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchDragOver, setBatchDragOver] = useState(false);
+  const batchInputRef = useRef(null);
+
+  const [inputText, setInputText] = useState("");
+  const [textAnalyzing, setTextAnalyzing] = useState(false);
+  const [textResult, setTextResult] = useState(null);
+  const [textError, setTextError] = useState(null);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [tx, inf, note] = await Promise.allSettled([
+          window.storage.get("radar-transactions"),
+          window.storage.get("radar-intel"),
+          window.storage.get("radar-dismissed-note"),
+        ]);
+        if (tx.status === "fulfilled" && tx.value) setTransactions(JSON.parse(tx.value.value));
+        if (inf.status === "fulfilled" && inf.value) setIntel(JSON.parse(inf.value.value));
+        if (note.status === "fulfilled" && note.value) setDismissedNote(true);
+        const pw = await window.storage.get("radar-pulse").catch(() => null);
+        if (pw?.value) setPulseWeeks(JSON.parse(pw.value));
+        const lu = await window.storage.get("radar-last-updated").catch(() => null);
+        if (lu?.value) setLastUpdated(new Date(lu.value));
+      } catch {}
+    }
+    load();
+  }, []);
+
+  async function persist(key, value) {
+    try {
+      await window.storage.set(key, JSON.stringify(value));
+      const now = new Date();
+      setLastUpdated(now);
+      await window.storage.set("radar-last-updated", now.toISOString()).catch(() => {});
+      setStorageStatus("Sparat ✓");
+      setTimeout(() => setStorageStatus(null), 2000);
+    } catch {}
+  }
+
+  function formatLastUpdated(date) {
+    if (!date) return null;
+    const d = new Date(date);
+    const today = new Date();
+    const isToday = d.toDateString() === today.toDateString();
+    const time = d.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
+    return isToday ? "Idag " + time : d.toLocaleDateString("sv-SE", { day: "numeric", month: "short" }) + " " + time;
+  }
+
+  function exportCSV(rows) {
+    const headers = ["Datum","Kopare","Saljare","Ort","Typ","Kvm","Pris (MSEK)","Yield (%)","Radgivare kopare","Radgivare saljare"];
+    const data = rows.map(t => [t.date, t.buyer, t.seller, t.location, t.type, t.sqm ?? "n.a.", t.price ?? "n.a.", t.yield ?? "n.a.", t.buyerAdvisor ?? "n.a.", t.sellerAdvisor ?? "n.a."]);
+    const csv = [headers, ...data].map(r => r.map(v => '"' + (v ?? "") + '"').join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const suffix = rows.length < transactions.length ? "-urval" : "";
+    const a = document.createElement("a"); a.href = url; a.download = "transaktioner" + suffix + ".csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function applyResult(parsed, source) {
+    const now = new Date().toISOString().split("T")[0];
+    const newWarnings = [];
+
+    if (parsed.bullets?.length) {
+      const entry = { id: Date.now(), date: now, source, category: parsed.category || "MARKNAD", bullets: parsed.bullets };
+      setIntel(prev => {
+        const dup = findIntelDuplicate(entry, prev);
+        if (dup) { newWarnings.push({ type: "intel", newItem: entry, existing: dup, id: `intel-${Date.now()}` }); return prev; }
+        const u = [entry, ...prev]; persist("radar-intel", u); return u;
+      });
+    }
+    if (parsed.transactions?.length) {
+      const newTx = parsed.transactions.map((t, i) => ({ ...t, id: Date.now() + i + 1, date: now }));
+      setTransactions(prev => {
+        const toAdd = []; 
+        newTx.forEach(t => {
+          const dup = findTxDuplicate(t, prev);
+          if (dup) newWarnings.push({ type: "tx", newItem: t, existing: dup, id: `tx-${Date.now()}-${Math.random()}` });
+          else toAdd.push(t);
+        });
+        if (toAdd.length) { const u = [...toAdd, ...prev]; persist("radar-transactions", u); return u; }
+        return prev;
+      });
+    }
+    if (newWarnings.length) setDupWarnings(prev => [...prev, ...newWarnings]);
+  }
+
+  function addPulseWeek(week) {
+    setPulseWeeks(prev => {
+      // Don't add if same week already exists
+      if (prev.find(w => w.week === week.week)) return prev;
+      const updated = [week, ...prev];
+      persist("radar-pulse", updated);
+      return updated;
+    });
+  }
+
+  function startEdit(tx) {
+    setEditingTx(tx.id);
+    setEditDraft({ ...tx });
+  }
+  function cancelEdit() { setEditingTx(null); setEditDraft({}); }
+  function saveEdit() {
+    setTransactions(prev => {
+      const updated = prev.map(t => t.id === editingTx ? { ...editDraft } : t);
+      persist("radar-transactions", updated);
+      return updated;
+    });
+    cancelEdit();
+  }
+  function deleteTx(id) {
+    if (!window.confirm("Ta bort denna transaktion?")) return;
+    setTransactions(prev => { const u = prev.filter(t => t.id !== id); persist("radar-transactions", u); return u; });
+  }
+
+  function addFilesToQueue(files) {
+    const pdfs = Array.from(files).filter(f => f.type === "application/pdf");
+    if (!pdfs.length) return;
+    setQueue(prev => [
+      ...prev,
+      ...pdfs.map(f => ({ id: `${f.name}-${Date.now()}-${Math.random()}`, file: f, status: "waiting", result: null, error: null }))
+    ]);
+  }
+
+  const handleBatchDrop = useCallback((e) => {
+    e.preventDefault(); setBatchDragOver(false);
+    addFilesToQueue(e.dataTransfer.files);
+  }, []);
+
+  async function runBatch() {
+    setBatchRunning(true);
+    // Process waiting items one by one
+    setQueue(prev => prev.map(item => item.status === "waiting" ? { ...item, status: "analyzing" } : item));
+    const snapshot = queue.filter(i => i.status === "waiting");
+    for (const item of snapshot) {
+      setQueue(prev => prev.map(i => i.id === item.id ? { ...i, status: "analyzing" } : i));
+      try {
+        const base64 = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result.split(",")[1]);
+          r.onerror = rej;
+          r.readAsDataURL(item.file);
+        });
+        const parsed = await callClaude([
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+          { type: "text", text: "Analysera dokumentet och extrahera fastighetstransaktioner, bolagsrörelser och marknadssignaler." },
+        ]);
+        applyResult(parsed, item.file.name);
+        // Also try to extract pulse data from same document
+        try {
+          const pulseRes = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 1500,
+              system: PULSE_SYSTEM_PROMPT,
+              messages: [{ role: "user", content: [
+                { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+                { type: "text", text: "Extrahera aktiekurser och räntedata från detta dokument." }
+              ]}],
+            }),
+          });
+          const pulseData = await pulseRes.json();
+          const pulseRaw = pulseData.content?.map(i => i.text || "").join("") || "{}";
+          const pulseParsed = JSON.parse(pulseRaw.replace(/```json|```/g, "").trim());
+          if (pulseParsed.week && pulseParsed.stocks?.length > 0) {
+            addPulseWeek({ ...pulseParsed, id: Date.now() + 999 });
+          }
+        } catch {}
+        setQueue(prev => prev.map(i => i.id === item.id ? { ...i, status: "done", result: parsed } : i));
+      } catch {
+        setQueue(prev => prev.map(i => i.id === item.id ? { ...i, status: "error", error: "Analysen misslyckades" } : i));
+      }
+      // Small delay between files to avoid rate limits
+      await new Promise(r => setTimeout(r, 800));
+    }
+    setBatchRunning(false);
+  }
+
+  async function analyzeText() {
+    if (!inputText.trim()) return;
+    setTextAnalyzing(true); setTextResult(null); setTextError(null);
+    try {
+      const parsed = await callClaude(inputText);
+      setTextResult(parsed);
+      applyResult(parsed, "Inklistrat");
+      setInputText("");
+    } catch { setTextError("Analysen misslyckades. Försök igen."); }
+    setTextAnalyzing(false);
+  }
+
+  // Time-filtered intel
+  const filteredIntel = intel.filter(item => {
+    if (timeFilter === "ALL") return true;
+    const days = timeFilter === "7D" ? 7 : 30;
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days);
+    return new Date(item.date) >= cutoff;
+  });
+
+  const filteredCompanies = filterStatus === "ALLA" ? companies : companies.filter(c => c.status === filterStatus);
+  const q = searchQuery.toLowerCase().trim();
+  const searchedTx = transactions.filter(t => {
+    if (q && ![ t.buyer, t.seller, t.location, t.type, t.buyerAdvisor, t.sellerAdvisor ].some(v => v?.toLowerCase().includes(q))) return false;
+    if (advSearch.type && t.type?.toLowerCase() !== advSearch.type.toLowerCase()) return false;
+    if (advSearch.location && !t.location?.toLowerCase().includes(advSearch.location.toLowerCase())) return false;
+    if (advSearch.dateFrom2 && t.date < advSearch.dateFrom2) return false;
+    if (advSearch.dateTo2 && t.date > advSearch.dateTo2) return false;
+    return true;
+  });
+  const activeAdvFilters = Object.values(advSearch).filter(Boolean).length;
+  const searchedIntel = intel.filter(i => {
+    if (!q) return true;
+    return i.source?.toLowerCase().includes(q) || i.category?.toLowerCase().includes(q) || i.bullets?.some(b => b.toLowerCase().includes(q));
+  });
+  const dateFilteredTx = searchedTx.filter(t => {
+    if (dateFrom && t.date < dateFrom) return false;
+    if (dateTo && t.date > dateTo) return false;
+    return true;
+  });
+  const sortedTx = [...dateFilteredTx].sort((a, b) => {
+    if (sortCol === "price") return b.price - a.price;
+    if (sortCol === "yield") return a.yield - b.yield;
+    if (sortCol === "sqm") return b.sqm - a.sqm;
+    return new Date(b.date) - new Date(a.date);
+  });
+
+  const TABS = [
+    { id: "dashboard", label: "Översikt" },
+    { id: "intel", label: "Nyhetsflöde" },
+    { id: "transactions", label: "Transaktioner" },
+    { id: "companies", label: "Bolagsradar" },
+    { id: "pulse", label: "Marknadspuls" },
+    { id: "analyze", label: "Lägg till" },
+  ];
+
+  return (
+    <div style={{ fontFamily: "'Instrument Sans', 'Helvetica Neue', sans-serif", background: "#fff", minHeight: "100vh", color: "#111" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        .tab { background: none; border: none; cursor: pointer; padding: 10px 18px; border-radius: 100px; font-family: inherit; font-size: 14px; font-weight: 500; transition: all 0.18s; color: #6b7280; }
+        .tab.on { background: #111; color: #fff; }
+        .tab:hover:not(.on) { background: #f3f4f6; color: #111; }
+        .pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 100px; font-size: 12px; font-weight: 500; }
+        .chip { display: inline-block; padding: 2px 10px; border-radius: 100px; font-size: 11px; font-weight: 500; background: #f3f4f6; color: #6b7280; }
+        .sort-btn { background: none; border: 1.5px solid #e5e7eb; cursor: pointer; padding: 5px 14px; border-radius: 100px; font-family: inherit; font-size: 12px; font-weight: 500; color: #6b7280; transition: all 0.15s; }
+        .sort-btn.on { border-color: #111; color: #111; background: #f9fafb; }
+        .fpill { background: none; border: 1.5px solid #e5e7eb; cursor: pointer; padding: 5px 16px; border-radius: 100px; font-family: inherit; font-size: 12px; font-weight: 500; color: #6b7280; transition: all 0.15s; }
+        .fpill.on { border-color: #111; background: #111; color: #fff; }
+        .abtn { background: #111; color: #fff; border: none; cursor: pointer; padding: 11px 26px; border-radius: 100px; font-family: inherit; font-size: 14px; font-weight: 600; transition: all 0.2s; }
+        .abtn:hover:not(:disabled) { background: #374151; }
+        .abtn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .card { background: #fff; border: 1.5px solid #f0f0f0; border-radius: 16px; transition: box-shadow 0.2s; }
+        .card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.06); }
+        .row-hover:hover { background: #fafafa; }
+        tr:hover .row-actions { opacity: 1 !important; transition: opacity 0.15s; }
+        .row-actions { transition: opacity 0.15s; }
+        .fade { animation: fadeUp 0.35s ease both; }
+        @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        .drop-zone { border: 2px dashed #e5e7eb; border-radius: 16px; transition: all 0.2s; cursor: pointer; }
+        .drop-zone.over { border-color: #111; background: #f9fafb; }
+        .drop-zone.has-file { border-style: solid; border-color: #bbf7d0; background: #f0fdf4; }
+        textarea:focus { outline: none; border-color: #111 !important; }
+        .spin { animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .divider { width: 1px; background: #f0f0f0; align-self: stretch; }
+        .panel-label { font-size: 11px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 14px; }
+        .tf-btn { background: none; border: 1.5px solid #e5e7eb; cursor: pointer; padding: 5px 14px; border-radius: 100px; font-family: inherit; font-size: 12px; font-weight: 500; color: #6b7280; transition: all 0.15s; }
+        .tf-btn.on { border-color: #111; color: #111; background: #f9fafb; }
+      `}</style>
+
+      {/* NAV */}
+      <div style={{ borderBottom: "1.5px solid #f0f0f0", padding: "0 40px", height: 64, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+          <div style={{ fontFamily: "Instrument Serif, serif", fontSize: 22, fontWeight: 400, marginRight: 8 }}>Fastighets<em>Radar</em></div>
+          <nav style={{ display: "flex", gap: 2 }}>
+            {TABS.map(t => (
+              <button key={t.id} className={`tab${tab === t.id ? " on" : ""}`} onClick={() => setTab(t.id)}>{t.label}</button>
+            ))}
+          </nav>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 13 }}>
+          {/* Search with company autocomplete */}
+          {(() => {
+            const sq = searchQuery.toLowerCase().trim();
+            // Gather all unique company names from transactions + companies list
+            const allNames = [...new Set([
+              ...transactions.map(t => t.buyer).filter(Boolean),
+              ...transactions.map(t => t.seller).filter(Boolean),
+              ...companies.map(c => c.name),
+            ])];
+            const suggestions = sq.length >= 1
+              ? allNames.filter(n => n.toLowerCase().includes(sq)).slice(0, 5)
+              : [];
+            return (
+              <div style={{ position: "relative" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, background: searchOpen ? "#fff" : "#f9fafb", border: "1.5px solid", borderColor: searchOpen ? "#111" : "#f0f0f0", borderRadius: 100, padding: "5px 14px", transition: "all 0.2s", cursor: "pointer" }}
+                  onClick={() => setSearchOpen(true)}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2.5" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                  {searchOpen
+                    ? <input autoFocus value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                        onBlur={() => setTimeout(() => { if (!searchQuery) setSearchOpen(false); }, 150)}
+                        placeholder="Sök bolag, ort, typ..."
+                        style={{ border: "none", outline: "none", fontFamily: "inherit", fontSize: 13, width: 200, background: "transparent", color: "#111" }} />
+                    : <span style={{ fontSize: 13, color: "#9ca3af" }}>Sök</span>
+                  }
+                  {searchQuery && <button onClick={e => { e.stopPropagation(); setSearchQuery(""); setSearchOpen(false); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>}
+                </div>
+                {/* Autocomplete dropdown */}
+                {searchOpen && suggestions.length > 0 && (
+                  <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "#fff", border: "1.5px solid #f0f0f0", borderRadius: 14, boxShadow: "0 8px 32px rgba(0,0,0,0.10)", minWidth: 260, zIndex: 200, overflow: "hidden" }}>
+                    <div style={{ padding: "8px 14px 6px", fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Bolag</div>
+                    {suggestions.map(name => {
+                      const profile = companies.find(c => c.name === name);
+                      const cfg = profile ? STATUS_CONFIG[profile.status] : null;
+                      return (
+                        <button key={name} onMouseDown={() => { setSelectedCompany(name); setSearchQuery(""); setSearchOpen(false); }}
+                          style={{ width: "100%", background: "none", border: "none", cursor: "pointer", padding: "9px 14px", display: "flex", alignItems: "center", gap: 10, textAlign: "left", fontFamily: "inherit", transition: "background 0.12s" }}
+                          onMouseOver={e => e.currentTarget.style.background = "#f9fafb"}
+                          onMouseOut={e => e.currentTarget.style.background = "none"}>
+                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: cfg ? cfg.bg : "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: cfg ? cfg.color : "#6b7280" }}>{name.charAt(0)}</span>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{name}</div>
+                            {cfg && <div style={{ fontSize: 11, color: cfg.color, fontWeight: 500 }}>{cfg.label}</div>}
+                          </div>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="2" strokeLinecap="round"><path d="M9 18l6-6-6-6"/></svg>
+                        </button>
+                      );
+                    })}
+                    {sq && (
+                      <div style={{ borderTop: "1px solid #f9fafb", padding: "8px 14px 10px" }}>
+                        <button onMouseDown={() => { setSearchOpen(false); }}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#9ca3af", fontFamily: "inherit", padding: 0 }}>
+                          Sök "{searchQuery}" i alla vyer →
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {/* Last updated */}
+          {formatLastUpdated(lastUpdated) && (
+            <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>
+              Uppdaterad: <span style={{ color: "#6b7280", fontWeight: 500 }}>{formatLastUpdated(lastUpdated)}</span>
+            </span>
+          )}
+          <span style={{ color: "#e5e7eb" }}>|</span>
+          <span style={{ color: "#16a34a", fontWeight: 600 }}>{DEFAULT_COMPANIES.filter(c => c.status === "KÖPARE").length} köpare</span>
+          <span style={{ color: "#dc2626", fontWeight: 600 }}>{DEFAULT_COMPANIES.filter(c => c.status === "SÄLJARE").length} säljare</span>
+        </div>
+      </div>
+
+      <div style={{ padding: "32px 40px", maxWidth: 1120, margin: "0 auto" }}>
+
+        {!dismissedNote && (
+          <div style={{ background: "#fffbeb", border: "1.5px solid #fde68a", borderRadius: 10, padding: "10px 18px", fontSize: 13, color: "#92400e", marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>⚠️ All förinstallerad data är exempeldata – inte verkliga transaktioner.</span>
+            <button onClick={() => { setDismissedNote(true); window.storage.set("radar-dismissed-note", "1").catch(() => {}); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#92400e", fontWeight: 700, fontSize: 16, marginLeft: 12 }}>×</button>
+          </div>
+        )}
+
+        {/* DASHBOARD */}
+        {tab === "dashboard" && <Dashboard transactions={transactions} companies={companies} intel={intel} onNavigate={setTab} />}
+
+        {/* INTEL */}
+        {tab === "intel" && (
+          <div className="fade">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 }}>
+              <h2 style={{ fontFamily: "Instrument Serif, serif", fontSize: 28, fontWeight: 400 }}>Nyhetsflöde</h2>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[["ALL","Alla"],["30D","30 dagar"],["7D","7 dagar"]].map(([v, l]) => (
+                  <button key={v} className={`tf-btn${timeFilter === v ? " on" : ""}`} onClick={() => setTimeFilter(v)}>{l}</button>
+                ))}
+              </div>
+            </div>
+            {(() => {
+              const displayIntel = (q ? searchedIntel : intel).filter(item => {
+                if (timeFilter === "ALL") return true;
+                const days = timeFilter === "7D" ? 7 : 30;
+                const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days);
+                return new Date(item.date) >= cutoff;
+              });
+              return displayIntel.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "60px 0", color: "#9ca3af", fontSize: 14 }}>Inga nyheter för valt filter.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {displayIntel.map(item => {
+                  const cfg = CAT_CONFIG[item.category] || CAT_CONFIG.MARKNAD;
+                  return (
+                    <div key={item.id} className="card" style={{ padding: "20px 24px", display: "flex", gap: 24 }}>
+                      <div style={{ minWidth: 90 }}>
+                        <div style={{ fontSize: 12, color: "#9ca3af", fontWeight: 500 }}>{item.date}</div>
+                        <div style={{ fontSize: 11, color: "#d1d5db", marginTop: 3 }}>{item.source}</div>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <span className="pill" style={{ background: cfg.bg, color: cfg.color, marginBottom: 10, display: "inline-flex" }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: cfg.color, display: "inline-block" }} />{item.category}
+                        </span>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                          {item.bullets.map((b, i) => (
+                            <div key={i} style={{ display: "flex", gap: 10, fontSize: 14, color: "#374151", lineHeight: 1.6 }}>
+                              <span style={{ color: cfg.color, fontWeight: 700, flexShrink: 0 }}>—</span>{b}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+            })()}
+          </div>
+        )}
+
+        {/* TRANSACTIONS */}
+        {tab === "transactions" && (
+          <div className="fade">
+            {/* Header row */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12 }}>
+              <div>
+                <h2 style={{ fontFamily: "Instrument Serif, serif", fontSize: 28, fontWeight: 400 }}>Transaktioner</h2>
+                <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>
+                  Visar {sortedTx.length} av {transactions.length}
+                  {(dateFrom || dateTo) && <span style={{ color: "#d97706", fontWeight: 500 }}> · datumfilter aktivt</span>}
+                  {activeAdvFilters > 0 && <span style={{ color: "#2563eb", fontWeight: 500 }}> · {activeAdvFilters} filter aktiva</span>}
+                  {q && <span> · sökning: "{searchQuery}"</span>}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: "#9ca3af" }}>Sortera:</span>
+                {[["date","Datum"],["price","Pris"],["sqm","Kvm"]].map(([col,lbl]) => (
+                  <button key={col} className={`sort-btn${sortCol===col?" on":""}`} onClick={()=>setSortCol(col)}>{lbl}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Filter toolbar */}
+            <div style={{ background: "#fafafa", border: "1.5px solid #f0f0f0", borderRadius: 14, padding: "12px 16px", marginBottom: 16 }}>
+              {/* Row 1: date range + adv toggle + export */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 500 }}>Datum:</span>
+                <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                  style={{ border: "1.5px solid #e5e7eb", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", color: "#111", background: "#fff", cursor: "pointer", outline: "none" }} />
+                <span style={{ fontSize: 12, color: "#9ca3af" }}>–</span>
+                <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                  style={{ border: "1.5px solid #e5e7eb", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontFamily: "inherit", color: "#111", background: "#fff", cursor: "pointer", outline: "none" }} />
+                {(dateFrom || dateTo) && (
+                  <button onClick={() => { setDateFrom(""); setDateTo(""); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#9ca3af", fontFamily: "inherit", padding: "0 2px" }}>Rensa ×</button>
+                )}
+                <div style={{ flex: 1 }} />
+                <button onClick={() => setAdvOpen(o => !o)}
+                  style={{ display: "flex", alignItems: "center", gap: 5, background: advOpen || activeAdvFilters > 0 ? "#111" : "none", color: advOpen || activeAdvFilters > 0 ? "#fff" : "#6b7280", border: "1.5px solid", borderColor: advOpen || activeAdvFilters > 0 ? "#111" : "#e5e7eb", borderRadius: 100, padding: "5px 14px", fontSize: 12, fontWeight: 500, fontFamily: "inherit", cursor: "pointer" }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+                  Filter{activeAdvFilters > 0 ? ` (${activeAdvFilters})` : ""}
+                </button>
+                <button onClick={() => exportCSV(sortedTx)}
+                  style={{ display: "flex", alignItems: "center", gap: 6, background: "#111", color: "#fff", border: "none", borderRadius: 100, padding: "6px 16px", fontFamily: "inherit", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Exportera {sortedTx.length < transactions.length ? `${sortedTx.length} rader` : "alla"} som CSV
+                </button>
+              </div>
+
+              {/* Row 2: advanced filters (collapsible) */}
+              {advOpen && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #e5e7eb", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5 }}>Fastighetstyp</div>
+                    <select value={advSearch.type} onChange={e => setAdvSearch(s => ({ ...s, type: e.target.value }))}
+                      style={{ border: "1.5px solid #e5e7eb", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", color: "#111", background: "#fff", outline: "none", cursor: "pointer" }}>
+                      <option value="">Alla typer</option>
+                      {[...new Set(transactions.map(t => t.type).filter(Boolean))].sort().map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5 }}>Ort</div>
+                    <input value={advSearch.location} onChange={e => setAdvSearch(s => ({ ...s, location: e.target.value }))}
+                      placeholder="t.ex. Stockholm"
+                      style={{ border: "1.5px solid #e5e7eb", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontFamily: "inherit", color: "#111", background: "#fff", outline: "none", width: 160 }} />
+                  </div>
+                  {activeAdvFilters > 0 && (
+                    <button onClick={() => setAdvSearch({ type: "", location: "", dateFrom2: "", dateTo2: "" })}
+                      style={{ background: "none", border: "1.5px solid #e5e7eb", borderRadius: 100, padding: "5px 14px", fontSize: 12, color: "#9ca3af", fontFamily: "inherit", cursor: "pointer", alignSelf: "flex-end" }}>
+                      Rensa alla filter
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Table */}
+            <div className="card" style={{ overflow: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 1000 }}>
+                <thead>
+                  <tr style={{ borderBottom: "1.5px solid #f0f0f0", background: "#fafafa" }}>
+                    {["Datum","Köpare","Säljare","Ort","Typ","Kvm","Pris (MSEK)","Yield","Råd. köpare","Råd. säljare",""].map(h => (
+                      <th key={h} style={{ padding: "11px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#9ca3af", letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedTx.map((tx, i) => {
+                    const isEditing = editingTx === tx.id;
+                    const inp = (field, opts = {}) => (
+                      <input value={editDraft[field] ?? ""} onChange={e => setEditDraft(d => ({ ...d, [field]: e.target.value }))}
+                        style={{ border: "1.5px solid #d1d5db", borderRadius: 6, padding: "3px 7px", fontSize: 12, fontFamily: "inherit", width: opts.wide ? 110 : opts.med ? 80 : 64, outline: "none", background: "#fff" }} />
+                    );
+                    return (
+                      <tr key={tx.id} style={{ borderBottom: i < sortedTx.length-1 ? "1px solid #f9fafb" : "none", background: isEditing ? "#fffbeb" : "transparent", transition: "background 0.15s" }}>
+                        <td style={{ padding: "10px 14px", color: "#9ca3af", fontSize: 12, whiteSpace: "nowrap" }}>
+                          {isEditing ? inp("date", {med:true}) : tx.date}
+                        </td>
+                        <td style={{ padding: "10px 14px" }}>
+                          {isEditing ? inp("buyer", {wide:true}) : (
+                            <button onClick={() => setSelectedCompany(tx.buyer)} style={{ background: "none", border: "none", cursor: "pointer", color: "#16a34a", fontWeight: 600, fontSize: 13, fontFamily: "inherit", padding: 0, textDecoration: "underline", textUnderlineOffset: 3, textDecorationColor: "#bbf7d0" }}>{tx.buyer}</button>
+                          )}
+                        </td>
+                        <td style={{ padding: "10px 14px" }}>
+                          {isEditing ? inp("seller", {wide:true}) : (
+                            <button onClick={() => setSelectedCompany(tx.seller)} style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontWeight: 500, fontSize: 13, fontFamily: "inherit", padding: 0, textDecoration: "underline", textUnderlineOffset: 3, textDecorationColor: "#fecaca" }}>{tx.seller}</button>
+                          )}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: "#374151" }}>
+                          {isEditing ? inp("location", {wide:true}) : tx.location}
+                        </td>
+                        <td style={{ padding: "10px 14px" }}>
+                          {isEditing ? inp("type", {wide:true}) : <span className="chip">{tx.type}</span>}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: tx.sqm === "n.a." ? "#d1d5db" : "#374151", fontStyle: tx.sqm === "n.a." && !isEditing ? "italic" : "normal" }}>
+                          {isEditing ? inp("sqm") : (tx.sqm === "n.a." ? "n.a." : Number(tx.sqm)?.toLocaleString("sv-SE"))}
+                        </td>
+                        <td style={{ padding: "10px 14px", fontWeight: !isEditing && tx.price !== "n.a." ? 600 : 400, color: !isEditing && tx.price === "n.a." ? "#d1d5db" : "#111" }}>
+                          {isEditing ? inp("price") : (tx.price === "n.a." ? <span style={{ fontStyle: "italic" }}>n.a.</span> : tx.price)}
+                        </td>
+                        <td style={{ padding: "10px 14px" }}>
+                          {isEditing ? inp("yield") : (
+                            tx.yield === "n.a." || !tx.yield
+                              ? <span style={{ color: "#d1d5db", fontStyle: "italic" }}>n.a.</span>
+                              : <span style={{ color: tx.yield > 5.5 ? "#16a34a" : tx.yield > 4.5 ? "#d97706" : "#dc2626", fontWeight: 600 }}>{tx.yield}%</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: tx.buyerAdvisor === "n.a." && !isEditing ? "#d1d5db" : "#6b7280", fontSize: 12, fontStyle: tx.buyerAdvisor === "n.a." && !isEditing ? "italic" : "normal" }}>
+                          {isEditing ? inp("buyerAdvisor", {wide:true}) : (tx.buyerAdvisor || "n.a.")}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: tx.sellerAdvisor === "n.a." && !isEditing ? "#d1d5db" : "#6b7280", fontSize: 12, fontStyle: tx.sellerAdvisor === "n.a." && !isEditing ? "italic" : "normal" }}>
+                          {isEditing ? inp("sellerAdvisor", {wide:true}) : (tx.sellerAdvisor || "n.a.")}
+                        </td>
+                        <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                          {isEditing ? (
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button onClick={saveEdit} style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: 100, padding: "4px 12px", fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Spara</button>
+                              <button onClick={cancelEdit} style={{ background: "none", border: "1.5px solid #e5e7eb", borderRadius: 100, padding: "4px 10px", fontSize: 11, color: "#6b7280", fontFamily: "inherit", cursor: "pointer" }}>Avbryt</button>
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", gap: 4, opacity: 0 }} className="row-actions">
+                              <button onClick={() => startEdit(tx)} title="Redigera" style={{ background: "none", border: "1.5px solid #e5e7eb", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "#6b7280", fontFamily: "inherit" }}>✎</button>
+                              <button onClick={() => deleteTx(tx.id)} title="Ta bort" style={{ background: "none", border: "1.5px solid #fecaca", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "#dc2626", fontFamily: "inherit" }}>×</button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* COMPANIES */}
+        {tab === "companies" && (
+          <div className="fade">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 }}>
+              <h2 style={{ fontFamily: "Instrument Serif, serif", fontSize: 28, fontWeight: 400 }}>Bolagsradar</h2>
+              <div style={{ display: "flex", gap: 6 }}>
+                {["ALLA","KÖPARE","SÄLJARE","AVVAKTAR"].map(s => (
+                  <button key={s} className={`fpill${filterStatus===s?" on":""}`} onClick={()=>setFilterStatus(s)}>
+                    {s === "ALLA" ? "Alla" : STATUS_CONFIG[s]?.label || s}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+              {filteredCompanies.map(c => {
+                const cfg = STATUS_CONFIG[c.status];
+                const ac = c.activity >= 70 ? "#16a34a" : c.activity >= 45 ? "#d97706" : "#dc2626";
+                return (
+                  <div key={c.name} className="card" style={{ padding: "22px 24px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+                      <button onClick={() => setSelectedCompany(c.name)} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: "Instrument Serif, serif", fontSize: 20, color: "#111", padding: 0, textAlign: "left", textDecoration: "underline", textUnderlineOffset: 4, textDecorationColor: "#e5e7eb" }}>{c.name}</button>
+                      <span className="pill" style={{ background: cfg.bg, color: cfg.color }}>
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: cfg.color, display: "inline-block" }} />{cfg.label}
+                      </span>
+                    </div>
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>Aktivitetsnivå</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: ac }}>{c.activity}%</span>
+                      </div>
+                      <div style={{ height: 5, background: "#f3f4f6", borderRadius: 10 }}>
+                        <div style={{ height: 5, width: `${c.activity}%`, background: ac, borderRadius: 10, transition: "width 0.8s" }} />
+                      </div>
+                    </div>
+                    <p style={{ fontSize: 13, color: "#6b7280", lineHeight: 1.65, marginBottom: 14 }}>{c.reason}</p>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {c.sectors.map(s => <span key={s} className="chip">{s}</span>)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* MARKNADSPULS */}
+        {tab === "pulse" && (
+          <MarketPulse
+            pulseWeeks={pulseWeeks}
+            onAddWeek={addPulseWeek}
+          />
+        )}
+
+        {/* ANALYZE */}
+        {tab === "analyze" && (
+          <div className="fade">
+            <h2 style={{ fontFamily: "Instrument Serif, serif", fontSize: 28, fontWeight: 400, marginBottom: 6 }}>Lägg till underlag</h2>
+            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 28, lineHeight: 1.6 }}>
+              Ladda upp flera PDF:er på en gång eller klistra in text – AI:n analyserar allt i kö och sparar resultaten automatiskt.
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr", gap: 0, alignItems: "start" }}>
+
+              {/* LEFT — BATCH PDF */}
+              <div style={{ paddingRight: 36 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                  <div className="panel-label" style={{ marginBottom: 0 }}>PDF-dokument — batch</div>
+                  {queue.length > 0 && (
+                    <button onClick={() => setQueue([])} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#9ca3af", fontFamily: "inherit" }}>
+                      Rensa kö
+                    </button>
+                  )}
+                </div>
+
+                {/* Drop zone */}
+                <div
+                  className={`drop-zone${batchDragOver ? " over" : ""}`}
+                  style={{ padding: "36px 24px", textAlign: "center", marginBottom: 16 }}
+                  onDragOver={e => { e.preventDefault(); setBatchDragOver(true); }}
+                  onDragLeave={() => setBatchDragOver(false)}
+                  onDrop={handleBatchDrop}
+                  onClick={() => batchInputRef.current?.click()}
+                >
+                  <input ref={batchInputRef} type="file" accept="application/pdf" multiple style={{ display: "none" }}
+                    onChange={e => { addFilesToQueue(e.target.files); e.target.value = ""; }} />
+                  <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}><UploadIcon /></div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 5 }}>
+                    Dra och släpp PDF:er här
+                  </div>
+                  <div style={{ fontSize: 13, color: "#9ca3af" }}>Flera filer stöds — klicka eller dra hela mappar</div>
+                </div>
+
+                {/* Queue list */}
+                {queue.length > 0 && (
+                  <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 6 }}>
+                    {queue.map(item => {
+                      const statusMap = {
+                        waiting:   { label: "Väntar",    color: "#9ca3af", bg: "#f9fafb", icon: "○" },
+                        analyzing: { label: "Analyserar", color: "#2563eb", bg: "#eff6ff", icon: "spin" },
+                        done:      { label: "Klar",       color: "#16a34a", bg: "#f0fdf4", icon: "✓" },
+                        error:     { label: "Fel",        color: "#dc2626", bg: "#fef2f2", icon: "✗" },
+                      };
+                      const s = statusMap[item.status];
+                      const txCount = item.result?.transactions?.length || 0;
+                      const bCount  = item.result?.bullets?.length || 0;
+                      return (
+                        <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: s.bg, borderRadius: 10, border: `1px solid ${item.status === "done" ? "#bbf7d0" : item.status === "error" ? "#fecaca" : "#f0f0f0"}` }}>
+                          <div style={{ flexShrink: 0, width: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            {item.status === "analyzing"
+                              ? <svg className="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2.5" strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                              : <span style={{ fontSize: 13, color: s.color, fontWeight: 700 }}>{s.icon}</span>
+                            }
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.file.name}</div>
+                            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>
+                              {item.status === "done"
+                                ? `${bCount} insikt${bCount !== 1 ? "er" : ""} · ${txCount} transaktion${txCount !== 1 ? "er" : ""}`
+                                : item.status === "error" ? item.error
+                                : `${(item.file.size / 1024).toFixed(0)} KB`}
+                            </div>
+                          </div>
+                          <span style={{ fontSize: 10, fontWeight: 600, color: s.color, letterSpacing: "0.04em", textTransform: "uppercase", flexShrink: 0 }}>{s.label}</span>
+                          {item.status === "waiting" && (
+                            <button onClick={() => setQueue(prev => prev.filter(i => i.id !== item.id))}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "#d1d5db", fontSize: 14, lineHeight: 1, padding: "0 2px", flexShrink: 0 }}>×</button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Summary bar when all done */}
+                {queue.length > 0 && queue.every(i => i.status === "done" || i.status === "error") && (
+                  <div style={{ padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, fontSize: 13, color: "#16a34a", fontWeight: 600, marginBottom: 14, textAlign: "center" }}>
+                    ✓ {queue.filter(i => i.status === "done").length} av {queue.length} filer analyserade och sparade
+                  </div>
+                )}
+
+                <button
+                  className="abtn"
+                  disabled={batchRunning || queue.filter(i => i.status === "waiting").length === 0}
+                  onClick={runBatch}
+                  style={{ width: "100%" }}
+                >
+                  {batchRunning
+                    ? <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                        <SpinIcon />
+                        Analyserar {queue.filter(i => i.status === "analyzing").length > 0 ? `"${queue.find(i => i.status === "analyzing")?.file.name.slice(0, 20)}..."` : "..."}
+                      </span>
+                    : queue.filter(i => i.status === "waiting").length > 0
+                      ? `Analysera ${queue.filter(i => i.status === "waiting").length} fil${queue.filter(i => i.status === "waiting").length > 1 ? "er" : ""}`
+                      : "Lägg till filer ovan"
+                  }
+                </button>
+              </div>
+
+              <div className="divider" />
+
+              {/* RIGHT — TEXT */}
+              <div style={{ paddingLeft: 36 }}>
+                <div className="panel-label">Mejl eller text</div>
+                <textarea value={inputText} onChange={e => setInputText(e.target.value)}
+                  placeholder="Klistra in nyhetsbrev, mejl eller annan text här..."
+                  style={{ width: "100%", minHeight: 220, background: "#fafafa", border: "1.5px solid #e5e7eb", borderRadius: 14, padding: "14px 16px", color: "#111", fontFamily: "inherit", fontSize: 14, lineHeight: 1.7, marginBottom: 16 }} />
+                <button className="abtn" disabled={!inputText.trim() || textAnalyzing} onClick={analyzeText} style={{ width: "100%" }}>
+                  {textAnalyzing ? <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><SpinIcon />Analyserar text...</span> : "Analysera text"}
+                </button>
+                {textError && <div style={{ marginTop: 14, padding: "11px 16px", background: "#fef2f2", border: "1.5px solid #fecaca", borderRadius: 10, fontSize: 13, color: "#dc2626" }}>{textError}</div>}
+                <ResultCard result={textResult} />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
