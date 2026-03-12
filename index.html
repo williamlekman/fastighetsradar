@@ -13,35 +13,27 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 
   <script>
-    // Storage shim using localStorage
     window.storage = {
       get: function(key) {
-        try {
-          var v = localStorage.getItem(key);
-          return Promise.resolve(v ? { key: key, value: v } : null);
-        } catch(e) { return Promise.resolve(null); }
+        try { var v = localStorage.getItem(key); return Promise.resolve(v ? { key: key, value: v } : null); }
+        catch(e) { return Promise.resolve(null); }
       },
       set: function(key, value) {
-        try {
-          var s = typeof value === "string" ? value : JSON.stringify(value);
-          localStorage.setItem(key, s);
-          return Promise.resolve({ key: key, value: s });
-        } catch(e) { return Promise.resolve(null); }
+        try { localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value)); return Promise.resolve({ key: key, value: value }); }
+        catch(e) { return Promise.resolve(null); }
       },
       delete: function(key) {
         try { localStorage.removeItem(key); } catch(e) {}
         return Promise.resolve({ key: key, deleted: true });
       },
       list: function(prefix) {
-        try {
-          var keys = Object.keys(localStorage).filter(function(k){ return !prefix || k.startsWith(prefix); });
-          return Promise.resolve({ keys: keys });
-        } catch(e) { return Promise.resolve({ keys: [] }); }
+        try { var keys = Object.keys(localStorage).filter(function(k){ return !prefix || k.startsWith(prefix); }); return Promise.resolve({ keys: keys }); }
+        catch(e) { return Promise.resolve({ keys: [] }); }
       }
     };
   </script>
 
-  <script type="text/babel" data-presets="react">
+  <script type="text/babel">
     const { useState, useEffect, useRef, useCallback, useReducer } = React;
 
 
@@ -698,7 +690,7 @@ function MarketPulse({ pulseWeeks, onAddWeek }) {
 }
 
 // ── MAIN ───────────────────────────────────────────────────
-export default function FastighetsRadar() {
+function App() {
   const [tab, setTab] = useState("dashboard");
   const [transactions, setTransactions] = useState(DEFAULT_TRANSACTIONS);
   const [companies] = useState(DEFAULT_COMPANIES);
