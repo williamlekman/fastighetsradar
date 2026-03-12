@@ -88,14 +88,23 @@ async function callClaude(content) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 1000,
+      max_tokens: 2000,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content }],
     }),
   });
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("Claude API error:", res.status, errText);
+    throw new Error("API error: " + res.status);
+  }
   const data = await res.json();
+  console.log("Claude raw response:", JSON.stringify(data).slice(0, 500));
+  if (data.error) throw new Error(data.error.message || "API error");
   const raw = data.content?.map(i => i.text || "").join("") || "{}";
-  return JSON.parse(raw.replace(/```json|```/g, "").trim());
+  const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/,"").trim();
+  console.log("Cleaned JSON:", cleaned.slice(0, 300));
+  return JSON.parse(cleaned);
 }
 
 // ── DEDUP HELPERS ──────────────────────────────────────────
